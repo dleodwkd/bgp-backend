@@ -25,7 +25,7 @@ router.post("/api/upload/presigned-url", async (req, res) => {
 
     // "이 버킷의 이 위치에, 이런 종류의 파일을 올릴 거다"라는 명령서(Command) 작성
     const command = new PutObjectCommand({
-      Bucket: "boeun-file-web-test-bucket",
+      Bucket: process.env.BUCKET_NAME,
       Key: fileKey,
       ContentType: contentType,
     });
@@ -56,7 +56,7 @@ router.post("/api/download/presigned-url", async (req, res) => {
 
     // 상단에 선언된 s3Client와 버킷명을 그대로 사용
     const command = new GetObjectCommand({
-      Bucket: "boeun-file-web-test-bucket",
+      Bucket: process.env.BUCKET_NAME,
       Key: fileKey,
     });
 
