@@ -14,6 +14,10 @@ app.use(express.json());
 // 📌 업로드가 성공하던 원래 구조 그대로 놔둡니다.
 app.use("/", uploadRouter);
 
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok" });
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 백엔드 서버가 ${PORT}번 포트에서 가동 중입니다!`);
 });
