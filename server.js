@@ -75,6 +75,56 @@ app.post("/api/register", async (req, res) => {
       .json({ error: "데이터베이스 저장 중 서버 에러가 발생했습니다." });
   }
 });
+// ==========================================
+// 5. 로그인 API (새로 추가되는 부분)
+// ==========================================
+app.post("/api/login", async (req, res) => {
+  const { email, password } = req.body;
+
+  // 필수 값이 누락되었는지 검증
+  if (!email || !password) {
+    return res
+      .status(400)
+      .json({ error: "이메일과 비밀번호를 모두 입력해주세요." });
+  }
+
+  try {
+    // 1. 데이터베이스에서 해당 이메일을 가진 유저가 있는지 검색
+    const query = `SELECT * FROM users WHERE email = ?`;
+    const [rows] = await db.query(query, [email]);
+
+    // 2. 가입된 이메일이 없는 경우
+    if (rows.length === 0) {
+      return res
+        .status(401)
+        .json({ error: "가입되지 않은 이메일 주소입니다." });
+    }
+
+    const user = rows[0];
+
+    // 3. 비밀번호 대조
+    // (현재는 가입할 때password_hash 필드에 넣었던 값과 사용자가 입력한 password를 비교합니다)
+    if (user.password_hash !== password) {
+      return res.status(401).json({ error: "비밀번호가 일치하지 않습니다." });
+    }
+
+    // 4. 로그인 성공 반환
+    // 프론트엔드에서 활용할 수 있도록 유저의 닉네임과 이메일을 함께 보내줍니다.
+    res.status(200).json({
+      success: true,
+      message: `${user.nickname}님, 환영합니다!`,
+      user: {
+        email: user.email,
+        nickname: user.nickname,
+      },
+    });
+  } catch (error) {
+    console.error("로그인 에러:", error);
+    res
+      .status(500)
+      .json({ error: "데이터베이스 조회 중 서버 에러가 발생했습니다." });
+  }
+});
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
