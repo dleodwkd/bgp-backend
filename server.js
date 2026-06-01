@@ -39,9 +39,6 @@ const db = mysql.createPool({
   }
 })();
 
-// 📌 업로드가 성공하던 원래 구조 그대로 놔둡니다.
-app.use("/", uploadRouter);
-
 // 4. 회원가입 API 예시 (앞서 만든 users 테이블 구조 적용)
 // 프론트엔드(HTML/React)에서 이 주소로 데이터를 보내면 DB에 저장됩니다.
 app.post("/api/register", async (req, res) => {
@@ -129,6 +126,9 @@ app.post("/api/login", async (req, res) => {
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
 });
+
+// 📌 업로드가 성공하던 원래 구조 그대로 놔둡니다.
+app.use("/", uploadRouter);
 
 app.listen(PORT, () => {
   console.log(`🚀 백엔드 서버가 ${PORT}번 포트에서 가동 중입니다!`);
