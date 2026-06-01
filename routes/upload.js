@@ -1,14 +1,17 @@
-// backend/routes/upload.js
 import dotenv from "dotenv";
 dotenv.config();
 
 import express from "express";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { GetObjectCommand } from "@aws-sdk/client-s3";
+import mysql from "mysql2/promise";
+
 const router = express.Router();
 
-// .env에 저장된 안전한 마스터 키로 S3 클라이언트 인증 장착!
 const s3Client = new S3Client({
   region: "ap-northeast-2",
   credentials: {
@@ -17,31 +20,42 @@ const s3Client = new S3Client({
   },
 });
 
-// React가 "POST /api/upload/presigned-url"로 요청을 보내면 여기가 실행됨
+// server.js와 동일한 풀 설정
+const db = mysql.createPool({
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  port: process.env.DB_PORT || 3306,
+});
+
+// ── 업로드 presigned URL 발급 ──────────────────────────────
 router.post("/api/upload/presigned-url", async (req, res) => {
   try {
-    const { fileName, contentType } = req.body; // React가 준 파일 정보 쏙 빼오기
+    const { fileName, contentType, fileSize, userEmail } = req.body; // userEmail 추가
 
-    // S3 안의 uploads/ 폴더에 타임스탬프를 붙여 겹치지 않는 파일명(Key) 생성
     const fileKey = `uploads/${Date.now()}_${fileName}`;
 
-    // "이 버킷의 이 위치에, 이런 종류의 파일을 올릴 거다"라는 명령서(Command) 작성
     const command = new PutObjectCommand({
       Bucket: process.env.BUCKET_NAME,
       Key: fileKey,
       ContentType: contentType,
     });
 
-    // ⭐ AWS 자격 증명 키로 서명된 5분(300초)짜리 일회용 PUT URL 생성!
     const presignedUrl = await getSignedUrl(s3Client, command, {
       expiresIn: 300,
     });
 
-    // React에게 일회용 주소(url)와 저장될 경로(key)를 기분 좋게 포장해서 리턴
-    return res.status(200).json({
-      url: presignedUrl,
-      key: fileKey,
-    });
+    // ✅ S3 업로드 전에 DB에 메타데이터 저장
+    await db.query(
+      `INSERT INTO files (user_email, file_name, s3_key, s3_region, file_size)
+       VALUES (?, ?, ?, 'ap-northeast-2', ?)`,
+      [userEmail || "guest@example.com", fileName, fileKey, fileSize || 0],
+    );
+
+    console.log(`✅ 파일 메타데이터 DB 저장 완료: ${fileName}`);
+
+    return res.status(200).json({ url: presignedUrl, key: fileKey });
   } catch (error) {
     console.error("URL 생성 중 에러 발생:", error);
     return res
@@ -50,13 +64,13 @@ router.post("/api/upload/presigned-url", async (req, res) => {
   }
 });
 
+// ── 다운로드 presigned URL 발급 + downloaded_at 업데이트 ──
 router.post("/api/download/presigned-url", async (req, res) => {
   try {
-    const { fileKey } = req.body;
+    const { fileKey, fileId } = req.body;
     if (!fileKey)
       return res.status(400).json({ error: "fileKey가 누락되었습니다." });
 
-    // 상단에 선언된 s3Client와 버킷명을 그대로 사용
     const command = new GetObjectCommand({
       Bucket: process.env.BUCKET_NAME,
       Key: fileKey,
@@ -64,12 +78,109 @@ router.post("/api/download/presigned-url", async (req, res) => {
 
     const url = await getSignedUrl(s3Client, command, { expiresIn: 600 });
 
+    // ✅ 다운로드 시각 기록
+    if (fileId) {
+      await db.query(`UPDATE files SET downloaded_at = NOW() WHERE id = ?`, [
+        fileId,
+      ]);
+    }
+
     console.log(`✅ 다운로드 URL 발급 성공: ${fileKey}`);
     return res.status(200).json({ url });
   } catch (error) {
     console.error("❌ 다운로드 URL 생성 실패:", error);
     return res.status(500).json({ error: error.message });
   }
+});
+
+// ── 3. 파일 목록 (전체 공유 파일) ──────────────────────────
+app.get("/api/files", async (req, res) => {
+  const [rows] = await db.query(
+    `SELECT * FROM files WHERE is_deleted = FALSE ORDER BY created_at DESC`,
+  );
+  res.json(rows);
+});
+
+// ── 4-1. 내 파일 ────────────────────────────────────────────
+app.get("/api/files/mine", async (req, res) => {
+  const { email } = req.query;
+  const [rows] = await db.query(
+    `SELECT * FROM files 
+     WHERE user_email = ? AND is_deleted = FALSE 
+     ORDER BY created_at DESC`,
+    [email],
+  );
+  res.json(rows);
+});
+
+// ── 4-2. 즐겨찾기 토글 ─────────────────────────────────────
+app.patch("/api/files/:id/favorite", async (req, res) => {
+  await db.query(
+    `UPDATE files SET is_favorite = NOT is_favorite WHERE id = ?`,
+    [req.params.id],
+  );
+  res.json({ success: true });
+});
+
+// ── 4-2. 즐겨찾기 목록 ─────────────────────────────────────
+app.get("/api/files/favorites", async (req, res) => {
+  const { email } = req.query;
+  const [rows] = await db.query(
+    `SELECT * FROM files 
+     WHERE user_email = ? AND is_favorite = TRUE AND is_deleted = FALSE 
+     ORDER BY created_at DESC`,
+    [email],
+  );
+  res.json(rows);
+});
+
+// ── 4-3. 최근 항목 ──────────────────────────────────────────
+app.get("/api/files/recent", async (req, res) => {
+  const { email } = req.query;
+  const [rows] = await db.query(
+    `SELECT * FROM files 
+     WHERE user_email = ? AND downloaded_at IS NOT NULL AND is_deleted = FALSE
+     ORDER BY downloaded_at DESC LIMIT 20`,
+    [email],
+  );
+  res.json(rows);
+});
+
+// ── 5. 휴지통 (soft delete) ─────────────────────────────────
+app.patch("/api/files/:id/trash", async (req, res) => {
+  await db.query(`UPDATE files SET is_deleted = TRUE WHERE id = ?`, [
+    req.params.id,
+  ]);
+  res.json({ success: true });
+});
+
+// 휴지통 목록
+app.get("/api/files/trash", async (req, res) => {
+  const { email } = req.query;
+  const [rows] = await db.query(
+    `SELECT * FROM files WHERE user_email = ? AND is_deleted = TRUE ORDER BY created_at DESC`,
+    [email],
+  );
+  res.json(rows);
+});
+
+// 휴지통에서 복원
+app.patch("/api/files/:id/restore", async (req, res) => {
+  await db.query(`UPDATE files SET is_deleted = FALSE WHERE id = ?`, [
+    req.params.id,
+  ]);
+  res.json({ success: true });
+});
+
+// ── 6. 폴더 생성 ────────────────────────────────────────────
+app.post("/api/folders", async (req, res) => {
+  const { user_email, folder_path } = req.body;
+  await db.query(
+    `INSERT INTO files (user_email, file_name, s3_key, s3_region, folder_path)
+     VALUES (?, '__folder__', '', 'ap-northeast-2', ?)`,
+    [user_email, folder_path],
+  );
+  res.json({ success: true });
 });
 
 export default router;
