@@ -87,9 +87,17 @@ router.post("/api/download/presigned-url", async (req, res) => {
 });
 
 // ── 파일 목록 ──────────────────────────────────────────────
+// 기존 /api/files → is_shared = TRUE 인 것만 반환하도록 수정
+// 공유된 파일 목록 — 본인 파일 제외
 router.get("/api/files", async (req, res) => {
+  const { email } = req.query; // ✅ 본인 이메일 받기
   const [rows] = await db.query(
-    `SELECT * FROM files WHERE is_deleted = FALSE ORDER BY created_at DESC`,
+    `SELECT * FROM files 
+     WHERE is_shared = TRUE 
+     AND is_deleted = FALSE 
+     AND user_email != ?         -- ✅ 본인 파일 제외
+     ORDER BY created_at DESC`,
+    [email || ""],
   );
   res.json(rows);
 });
@@ -160,6 +168,45 @@ router.post("/api/folders", async (req, res) => {
     [user_email, folder_path],
   );
   res.json({ success: true });
+});
+// ── 공유하기 토글 ────────────────────────────────────────
+router.patch("/api/files/:id/share", async (req, res) => {
+  await db.query(`UPDATE files SET is_shared = NOT is_shared WHERE id = ?`, [
+    req.params.id,
+  ]);
+  res.json({ success: true });
+});
+
+// ── 실제 삭제 (S3 + DB) ──────────────────────────────────
+router.delete("/api/files/:id", async (req, res) => {
+  try {
+    const [rows] = await db.query(`SELECT * FROM files WHERE id = ?`, [
+      req.params.id,
+    ]);
+    if (rows.length === 0) return res.status(404).json({ error: "파일 없음" });
+
+    const file = rows[0];
+
+    // S3에서 실제 삭제
+    if (file.s3_key) {
+      const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
+      await s3Client.send(
+        new DeleteObjectCommand({
+          Bucket: process.env.BUCKET_NAME,
+          Key: file.s3_key,
+        }),
+      );
+    }
+
+    // DB에서 삭제
+    await db.query(`DELETE FROM files WHERE id = ?`, [req.params.id]);
+
+    console.log(`✅ 파일 영구 삭제 완료: ${file.file_name}`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error("❌ 파일 삭제 실패:", error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 export default router;
