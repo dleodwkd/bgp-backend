@@ -20,7 +20,6 @@ const s3Client = new S3Client({
   },
 });
 
-// server.js와 동일한 풀 설정
 const db = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -29,11 +28,9 @@ const db = mysql.createPool({
   port: process.env.DB_PORT || 3306,
 });
 
-// ── 업로드 presigned URL 발급 ──────────────────────────────
 router.post("/api/upload/presigned-url", async (req, res) => {
   try {
-    const { fileName, contentType, fileSize, userEmail } = req.body; // userEmail 추가
-
+    const { fileName, contentType, fileSize, userEmail } = req.body;
     const fileKey = `uploads/${Date.now()}_${fileName}`;
 
     const command = new PutObjectCommand({
@@ -46,7 +43,6 @@ router.post("/api/upload/presigned-url", async (req, res) => {
       expiresIn: 300,
     });
 
-    // ✅ S3 업로드 전에 DB에 메타데이터 저장
     await db.query(
       `INSERT INTO files (user_email, file_name, s3_key, s3_region, file_size)
        VALUES (?, ?, ?, 'ap-northeast-2', ?)`,
@@ -54,7 +50,6 @@ router.post("/api/upload/presigned-url", async (req, res) => {
     );
 
     console.log(`✅ 파일 메타데이터 DB 저장 완료: ${fileName}`);
-
     return res.status(200).json({ url: presignedUrl, key: fileKey });
   } catch (error) {
     console.error("URL 생성 중 에러 발생:", error);
@@ -64,7 +59,6 @@ router.post("/api/upload/presigned-url", async (req, res) => {
   }
 });
 
-// ── 다운로드 presigned URL 발급 + downloaded_at 업데이트 ──
 router.post("/api/download/presigned-url", async (req, res) => {
   try {
     const { fileKey, fileId } = req.body;
@@ -78,7 +72,6 @@ router.post("/api/download/presigned-url", async (req, res) => {
 
     const url = await getSignedUrl(s3Client, command, { expiresIn: 600 });
 
-    // ✅ 다운로드 시각 기록
     if (fileId) {
       await db.query(`UPDATE files SET downloaded_at = NOW() WHERE id = ?`, [
         fileId,
@@ -93,28 +86,24 @@ router.post("/api/download/presigned-url", async (req, res) => {
   }
 });
 
-// ── 3. 파일 목록 (전체 공유 파일) ──────────────────────────
-app.get("/api/files", async (req, res) => {
+// ── 파일 목록 ──────────────────────────────────────────────
+router.get("/api/files", async (req, res) => {
   const [rows] = await db.query(
     `SELECT * FROM files WHERE is_deleted = FALSE ORDER BY created_at DESC`,
   );
   res.json(rows);
 });
 
-// ── 4-1. 내 파일 ────────────────────────────────────────────
-app.get("/api/files/mine", async (req, res) => {
+router.get("/api/files/mine", async (req, res) => {
   const { email } = req.query;
   const [rows] = await db.query(
-    `SELECT * FROM files 
-     WHERE user_email = ? AND is_deleted = FALSE 
-     ORDER BY created_at DESC`,
+    `SELECT * FROM files WHERE user_email = ? AND is_deleted = FALSE ORDER BY created_at DESC`,
     [email],
   );
   res.json(rows);
 });
 
-// ── 4-2. 즐겨찾기 토글 ─────────────────────────────────────
-app.patch("/api/files/:id/favorite", async (req, res) => {
+router.patch("/api/files/:id/favorite", async (req, res) => {
   await db.query(
     `UPDATE files SET is_favorite = NOT is_favorite WHERE id = ?`,
     [req.params.id],
@@ -122,40 +111,32 @@ app.patch("/api/files/:id/favorite", async (req, res) => {
   res.json({ success: true });
 });
 
-// ── 4-2. 즐겨찾기 목록 ─────────────────────────────────────
-app.get("/api/files/favorites", async (req, res) => {
+router.get("/api/files/favorites", async (req, res) => {
   const { email } = req.query;
   const [rows] = await db.query(
-    `SELECT * FROM files 
-     WHERE user_email = ? AND is_favorite = TRUE AND is_deleted = FALSE 
-     ORDER BY created_at DESC`,
+    `SELECT * FROM files WHERE user_email = ? AND is_favorite = TRUE AND is_deleted = FALSE ORDER BY created_at DESC`,
     [email],
   );
   res.json(rows);
 });
 
-// ── 4-3. 최근 항목 ──────────────────────────────────────────
-app.get("/api/files/recent", async (req, res) => {
+router.get("/api/files/recent", async (req, res) => {
   const { email } = req.query;
   const [rows] = await db.query(
-    `SELECT * FROM files 
-     WHERE user_email = ? AND downloaded_at IS NOT NULL AND is_deleted = FALSE
-     ORDER BY downloaded_at DESC LIMIT 20`,
+    `SELECT * FROM files WHERE user_email = ? AND downloaded_at IS NOT NULL AND is_deleted = FALSE ORDER BY downloaded_at DESC LIMIT 20`,
     [email],
   );
   res.json(rows);
 });
 
-// ── 5. 휴지통 (soft delete) ─────────────────────────────────
-app.patch("/api/files/:id/trash", async (req, res) => {
+router.patch("/api/files/:id/trash", async (req, res) => {
   await db.query(`UPDATE files SET is_deleted = TRUE WHERE id = ?`, [
     req.params.id,
   ]);
   res.json({ success: true });
 });
 
-// 휴지통 목록
-app.get("/api/files/trash", async (req, res) => {
+router.get("/api/files/trash", async (req, res) => {
   const { email } = req.query;
   const [rows] = await db.query(
     `SELECT * FROM files WHERE user_email = ? AND is_deleted = TRUE ORDER BY created_at DESC`,
@@ -164,16 +145,14 @@ app.get("/api/files/trash", async (req, res) => {
   res.json(rows);
 });
 
-// 휴지통에서 복원
-app.patch("/api/files/:id/restore", async (req, res) => {
+router.patch("/api/files/:id/restore", async (req, res) => {
   await db.query(`UPDATE files SET is_deleted = FALSE WHERE id = ?`, [
     req.params.id,
   ]);
   res.json({ success: true });
 });
 
-// ── 6. 폴더 생성 ────────────────────────────────────────────
-app.post("/api/folders", async (req, res) => {
+router.post("/api/folders", async (req, res) => {
   const { user_email, folder_path } = req.body;
   await db.query(
     `INSERT INTO files (user_email, file_name, s3_key, s3_region, folder_path)
