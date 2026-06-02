@@ -1,0 +1,69 @@
+name: Deploy to AWS ASG
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # 1. AWS 자격증명 설정
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ap-northeast-2 # 본인의 AWS 리전
+
+    # 2. AWS CLI로 ASG 내의 인스턴스 Public IP 동적 추출
+    - name: Get ASG Instances Public IPs
+      id: get-ips
+      run: |
+        # '내-asg-이름' 부분을 실제 AWS Auto Scaling 그룹명으로 변경하세요.
+        INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
+          --auto-scaling-group-names "adp-app-asg" \
+          --query "AutoScalingGroups[0].Instances[?LifecycleState=='InService'].InstanceId" \
+          --output text)
+        
+        if [ -z "$INSTANCE_IDS" ]; then
+          echo "현재 가동 중인 인스턴스가 없습니다."
+          exit 1
+        fi
+
+        # 인스턴스 ID 목록으로 Public IP 조회
+        IPS=$(aws ec2 describe-instances \
+          --instance-ids $INSTANCE_IDS \
+          --query "Reservations[*].Instances[*].PublicIpAddress" \
+          --output text)
+        
+        echo "TARGET_IPS=$IPS" >> $GITHUB_ENV
+        echo "조회된 IP 목록: $IPS"
+
+    # 3. SSH Key 설정
+    - name: Setup SSH Key
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.AWS_SSH_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        # SSH 호스트 체크 무시 설정
+        echo -e "Host *\n\tStrictHostKeyChecking no\n" >> ~/.ssh/config
+
+    # 4. 조회된 모든 IP에 순차적으로 배포 진행
+    - name: Deploy to Instances
+      run: |
+        for ip in ${{ env.TARGET_IPS }}; do
+          echo "🚀 $ip 서버에 배포 및 서비스 재시작을 시작합니다..."
+          
+          # 1) 기존 앱 폴더로 이동해 최신 코드 pull 및 빌드/디펜던시 설치
+          # 2) systemctl 서비스 재시작 (서비스명 'nodeapp' 가정)
+          ssh ${{ secrets.EC2_USER }}@$ip "
+            cd /home/ec2-user/app && \
+            git pull && \
+            npm install --omit=dev && \
+            sudo systemctl restart nodeapp
+          "
+        done
