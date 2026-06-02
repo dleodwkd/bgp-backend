@@ -1,3 +1,4 @@
+// 깃허브 액션 적용 완료
 // backend/server.js
 import dotenv from "dotenv";
 import express from "express";
