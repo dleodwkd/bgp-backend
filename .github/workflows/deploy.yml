@@ -77,5 +77,5 @@ jobs:
             sudo systemctl restart nodeapp
             
             echo "✅ $ip 서버에 최신 코드가 성공적으로 적용되었습니다!"
-          EOF
+            EOF
         done
