@@ -64,7 +64,7 @@ jobs:
           # 1) 기존 앱 폴더로 이동해 최신 코드 pull 및 빌드/디펜던시 설치
           # 2) systemctl 서비스 재시작 (서비스명 'nodeapp' 가정)
           ssh ${{ secrets.EC2_USER }}@$ip "
-            cd /home/ec2-user/app && \
+            cd /home/ec2-user/backend && \
             git pull && \
             npm install --omit=dev && \
             sudo systemctl restart nodeapp
