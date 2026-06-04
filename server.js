@@ -172,42 +172,6 @@ app.post("/api/files/upload-success", async (req, res) => {
   }
 });
 
-// ==========================================
-// [새로 추가] 7. 파일 삭제 및 용량 회수 API (4번 로직)
-// ==========================================
-app.delete("/api/files/:fileId", async (req, res) => {
-  const { userId } = req.body; // 보안을 위해 본인 파일이 맞는지 대조할 유저 ID
-  const { fileId } = req.params;
-
-  if (!userId) {
-    return res.status(400).json({ error: "유저 식별 정보가 필요합니다." });
-  }
-
-  try {
-    // 4번 로직: 유저 ID와 파일 ID가 완벽히 일치하는 행을 지워서 자동으로 용량 회수 효과 생성
-    const deleteQuery = `
-      DELETE FROM files 
-      WHERE file_id = ? AND user_id = ?;
-    `;
-    const [result] = await db.query(deleteQuery, [fileId, userId]);
-
-    // 삭제된 데이터가 없다면 해킹 시도이거나 잘못된 접근
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ error: "삭제할 파일이 존재하지 않거나 권한이 없습니다." });
-    }
-
-    // 💡 팁: 실제 프로덕션 단계에서는 여기에 AWS SDK를 연동해 S3 버킷에 있는 실물 파일도 함께 지우는 코드를 추가해 줍니다.
-
-    res.status(200).json({
-      success: true,
-      message: "파일 데이터가 정상적으로 지워져 저장 공간이 확보되었습니다."
-    });
-
-  } catch (error) {
-    console.error("파일 삭제 중 서버 에러:", error);
-    res.status(500).json({ error: "데이터베이스 처리 중 에러가 발생했습니다." });
-  }
-});
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
