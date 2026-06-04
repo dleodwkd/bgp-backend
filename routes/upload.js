@@ -33,6 +33,32 @@ router.post("/api/upload/presigned-url", async (req, res) => {
     const { fileName, contentType, fileSize, userEmail } = req.body;
     const fileKey = `uploads/${Date.now()}_${fileName}`;
 
+    // ✅ 용량 체크 (추가된 부분)
+    const [rows] = await db.query(
+      `SELECT 
+         u.max_storage_size,
+         IFNULL(SUM(f.file_size), 0) AS used
+       FROM users u
+       LEFT JOIN files f 
+         ON u.email = f.user_email AND f.is_deleted = FALSE
+       WHERE u.email = ?
+       GROUP BY u.max_storage_size`,
+      [userEmail]
+    );
+
+    if (rows.length > 0) {
+      const { max_storage_size, used } = rows[0];
+      const remaining = max_storage_size - used;
+
+      if (fileSize > remaining) {
+        return res.status(400).json({
+          error: `저장 공간이 부족합니다.`,
+          remaining,
+          max_storage_size,
+        });
+      }
+    }
+    
     const command = new PutObjectCommand({
       Bucket: process.env.BUCKET_NAME,
       Key: fileKey,
