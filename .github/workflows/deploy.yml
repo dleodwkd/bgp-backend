@@ -61,20 +61,19 @@ jobs:
         for ip in ${{ env.TARGET_IPS }}; do
           echo "🚀 $ip 서버에 배포 및 서비스 재시작을 시작합니다..."
           
-          ssh ${{ secrets.EC2_USER }}@$ip << 'EOF'
-            cd /home/ec2-user/backend
-            
-            echo "--- [1/3] Git Pull 진행 중 ---"
-            git pull
-            
-            echo "--- [2/3] npm 패키지 설치 중 ---"
-            npm install --omit=dev
-            
-            echo "--- [3/3] Systemd 서비스 재시작 중 ---"
-            sudo systemctl restart nodeapp
-            
-            echo "✅ $ip 서버에 최신 코드가 성공적으로 적용되었습니다!"
-EOF
-# 💡 위 EOF 글자 앞에는 스페이스, 탭 등 아무런 공백이 없어야 합니다.
-
+          # 💡 << 뒤에 마이너스(-)를 붙이면 EOF 앞의 '탭(Tab)' 공백을 허용합니다.
+          ssh ${{ secrets.EC2_USER }}@$ip <<- 'EOF'
+						cd /home/ec2-user/backend
+						
+						echo "--- [1/3] Git Pull 진행 중 ---"
+						git pull
+						
+						echo "--- [2/3] npm 패키지 설치 중 ---"
+						npm install --omit=dev
+						
+						echo "--- [3/3] Systemd 서비스 재시작 중 ---"
+						sudo systemctl restart nodeapp
+						
+						echo "✅ $ip 서버에 최신 코드가 성공적으로 적용되었습니다!"
+						EOF
         done
