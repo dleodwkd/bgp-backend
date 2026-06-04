@@ -22,37 +22,41 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ap-northeast-2 # 본인의 AWS 리전
 
-    # 2. AWS CLI로 ASG 내의 인스턴스 Public IP 동적 추출
+    # 2. AWS CLI로 ASG 내의 인스턴스 IP 동적 추출 (최종 완결판)
     - name: Get ASG Instances Public IPs
       id: get-ips
       run: |
-        echo "🔍 [디버깅] ASG 전체 인스턴스 상태 상태 확인:"
-        aws autoscaling describe-auto-scaling-groups \
-          --auto-scaling-group-names "adp-app-asg" \
-          --query "AutoScalingGroups[0].Instances[*].{Id:InstanceId, State:LifecycleState}" \
-          --output table
-
-        echo "🔍 [디버깅] InService 상태인 인스턴스 ID 추출:"
+        # 1) InService 상태인 인스턴스 ID 목록 추출 후, xargs로 공백 한 줄 정렬
         INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
           --auto-scaling-group-names "adp-app-asg" \
           --query "AutoScalingGroups[0].Instances[?LifecycleState=='InService'].InstanceId" \
-          --output text)
+          --output text | xargs)
         
-        echo "추출된 INSTANCE_IDS: '$INSTANCE_IDS'"
+        echo "추출된 INSTANCE_IDS: $INSTANCE_IDS"
 
         if [ -z "$INSTANCE_IDS" ] || [ "$INSTANCE_IDS" = "None" ]; then
-          echo "❌ 에러: 현재 InService 상태인 인스턴스 ID를 찾을 수 없습니다. ASG 이름이나 인스턴스 상태를 확인하세요."
+          echo "❌ 가동 중인 인스턴스 ID가 없습니다."
           exit 1
         fi
 
-        # xargs를 붙여 개행 문자 제거 처리
+        # 2) 퍼블릭 IP 조회 시도
         IPS=$(aws ec2 describe-instances \
           --instance-ids $INSTANCE_IDS \
           --query "Reservations[*].Instances[*].PublicIpAddress" \
           --output text | xargs)
         
+        # 3) 💡 [예외 처리] 만약 퍼블릭 IP가 비어있다면 프라이빗(내부) IP 조회를 시도합니다.
+        if [ -z "$IPS" ] || [ "$IPS" = "None" ]; then
+          echo "ℹ️ 퍼블릭 IP가 발견되지 않아 프라이빗 IP를 조회합니다..."
+          IPS=$(aws ec2 describe-instances \
+            --instance-ids $INSTANCE_IDS \
+            --query "Reservations[*].Instances[*].PrivateIpAddress" \
+            --output text | xargs)
+        fi
+        
+        # 4) 최종 환경 변수 저장
         echo "TARGET_IPS=$IPS" >> $GITHUB_ENV
-        echo "조회된 IP 목록: '$IPS'"
+        echo "최종 조회된 IP 목록: '$IPS'"
 
     # 3. SSH Key 설정
     - name: Setup SSH Key
