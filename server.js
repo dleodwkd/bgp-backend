@@ -41,11 +41,9 @@ const db = mysql.createPool({
 })();
 
 // 4. 회원가입 API 예시 (앞서 만든 users 테이블 구조 적용)
-// 프론트엔드(HTML/React)에서 이 주소로 데이터를 보내면 DB에 저장됩니다.
 app.post("/api/register", async (req, res) => {
   const { email, password_hash, nickname } = req.body;
 
-  // 필수 값이 누락되었는지 검증
   if (!email || !password_hash || !nickname) {
     return res
       .status(400)
@@ -63,7 +61,6 @@ app.post("/api/register", async (req, res) => {
   } catch (error) {
     console.error("회원가입 에러:", error);
 
-    // 이메일 중복 에러 처리 (MySQL 에러 코드 1062: Duplicate entry)
     if (error.errno === 1062) {
       return res.status(409).json({ error: "이미 가입된 이메일 주소입니다." });
     }
@@ -73,13 +70,11 @@ app.post("/api/register", async (req, res) => {
       .json({ error: "데이터베이스 저장 중 서버 에러가 발생했습니다." });
   }
 });
-// ==========================================
-// 5. 로그인 API (새로 추가되는 부분)
-// ==========================================
+
+// 5. 로그인 API
 app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
 
-  // 필수 값이 누락되었는지 검증
   if (!email || !password) {
     return res
       .status(400)
@@ -87,11 +82,9 @@ app.post("/api/login", async (req, res) => {
   }
 
   try {
-    // 1. 데이터베이스에서 해당 이메일을 가진 유저가 있는지 검색
     const query = `SELECT * FROM users WHERE email = ?`;
     const [rows] = await db.query(query, [email]);
 
-    // 2. 가입된 이메일이 없는 경우
     if (rows.length === 0) {
       return res
         .status(401)
@@ -100,18 +93,15 @@ app.post("/api/login", async (req, res) => {
 
     const user = rows[0];
 
-    // 3. 비밀번호 대조
-    // (현재는 가입할 때password_hash 필드에 넣었던 값과 사용자가 입력한 password를 비교합니다)
     if (user.password_hash !== password) {
       return res.status(401).json({ error: "비밀번호가 일치하지 않습니다." });
     }
 
-    // 4. 로그인 성공 반환
-    // 프론트엔드에서 활용할 수 있도록 유저의 닉네임과 이메일을 함께 보내줍니다.
     res.status(200).json({
       success: true,
       message: `${user.nickname}님, 환영합니다!`,
       user: {
+        id: user.user_id, // 💡 중요: 용량 체크 시 구분을 위해 유저 식별용 ID를 프론트에 넘겨주는 것이 좋습니다.
         email: user.email,
         nickname: user.nickname,
       },
@@ -121,6 +111,101 @@ app.post("/api/login", async (req, res) => {
     res
       .status(500)
       .json({ error: "데이터베이스 조회 중 서버 에러가 발생했습니다." });
+  }
+});
+
+// ==========================================
+// [새로 추가] 6. 파일 용량 체크 및 기록 API (2번 + 3번 로직)
+// ==========================================
+app.post("/api/files/upload-success", async (req, res) => {
+  const { userId, fileName, s3Url, fileSize } = req.body;
+
+  // 필수 인자값 확인
+  if (!userId || !fileName || !s3Url || !fileSize) {
+    return res.status(400).json({ error: "파일 기록에 필요한 필수 정보가 누락되었습니다." });
+  }
+
+  try {
+    // 2번 로직: 해당 유저의 사용 가능한 남은 용량 조회 및 검증
+    const verifyQuery = `
+      SELECT 
+        u.max_storage_size,
+        IFNULL(SUM(f.file_size), 0) AS current_used_size,
+        u.max_storage_size - IFNULL(SUM(f.file_size), 0) AS remaining_size
+      FROM users u
+      LEFT JOIN files f ON u.user_id = f.user_id
+      WHERE u.user_id = ?
+      GROUP BY u.user_id, u.max_storage_size;
+    `;
+    
+    const [rows] = await db.query(verifyQuery, [userId]);
+    
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "존재하지 않는 유저입니다." });
+    }
+
+    const { remaining_size } = rows[0];
+
+    // 남은 용량보다 새로 올릴 파일의 크기가 더 크다면 예외 처리
+    if (fileSize > remaining_size) {
+      return res.status(400).json({ 
+        error: "개인 저장 공간이 부족하여 파일을 등록할 수 없습니다.",
+        remainingSize: remaining_size 
+      });
+    }
+
+    // 3번 로직: 용량 검증 통과 시 files 테이블에 파일 메타데이터 기록
+    const insertQuery = `
+      INSERT INTO files (user_id, file_name, s3_url, file_size) 
+      VALUES (?, ?, ?, ?);
+    `;
+    await db.query(insertQuery, [userId, fileName, s3Url, fileSize]);
+
+    res.status(200).json({
+      success: true,
+      message: "파일이 성공적으로 기록되었으며 용량이 반영되었습니다."
+    });
+
+  } catch (error) {
+    console.error("파일 업로드 기록 중 서버 에러:", error);
+    res.status(500).json({ error: "데이터베이스 처리 중 에러가 발생했습니다." });
+  }
+});
+
+// ==========================================
+// [새로 추가] 7. 파일 삭제 및 용량 회수 API (4번 로직)
+// ==========================================
+app.delete("/api/files/:fileId", async (req, res) => {
+  const { userId } = req.body; // 보안을 위해 본인 파일이 맞는지 대조할 유저 ID
+  const { fileId } = req.params;
+
+  if (!userId) {
+    return res.status(400).json({ error: "유저 식별 정보가 필요합니다." });
+  }
+
+  try {
+    // 4번 로직: 유저 ID와 파일 ID가 완벽히 일치하는 행을 지워서 자동으로 용량 회수 효과 생성
+    const deleteQuery = `
+      DELETE FROM files 
+      WHERE file_id = ? AND user_id = ?;
+    `;
+    const [result] = await db.query(deleteQuery, [fileId, userId]);
+
+    // 삭제된 데이터가 없다면 해킹 시도이거나 잘못된 접근
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "삭제할 파일이 존재하지 않거나 권한이 없습니다." });
+    }
+
+    // 💡 팁: 실제 프로덕션 단계에서는 여기에 AWS SDK를 연동해 S3 버킷에 있는 실물 파일도 함께 지우는 코드를 추가해 줍니다.
+
+    res.status(200).json({
+      success: true,
+      message: "파일 데이터가 정상적으로 지워져 저장 공간이 확보되었습니다."
+    });
+
+  } catch (error) {
+    console.error("파일 삭제 중 서버 에러:", error);
+    res.status(500).json({ error: "데이터베이스 처리 중 에러가 발생했습니다." });
   }
 });
 
