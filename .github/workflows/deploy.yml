@@ -26,25 +26,33 @@ jobs:
     - name: Get ASG Instances Public IPs
       id: get-ips
       run: |
-        # '내-asg-이름' 부분을 실제 AWS Auto Scaling 그룹명으로 변경하세요.
+        echo "🔍 [디버깅] ASG 전체 인스턴스 상태 상태 확인:"
+        aws autoscaling describe-auto-scaling-groups \
+          --auto-scaling-group-names "adp-app-asg" \
+          --query "AutoScalingGroups[0].Instances[*].{Id:InstanceId, State:LifecycleState}" \
+          --output table
+
+        echo "🔍 [디버깅] InService 상태인 인스턴스 ID 추출:"
         INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
           --auto-scaling-group-names "adp-app-asg" \
           --query "AutoScalingGroups[0].Instances[?LifecycleState=='InService'].InstanceId" \
           --output text)
         
-        if [ -z "$INSTANCE_IDS" ]; then
-          echo "현재 가동 중인 인스턴스가 없습니다."
+        echo "추출된 INSTANCE_IDS: '$INSTANCE_IDS'"
+
+        if [ -z "$INSTANCE_IDS" ] || [ "$INSTANCE_IDS" = "None" ]; then
+          echo "❌ 에러: 현재 InService 상태인 인스턴스 ID를 찾을 수 없습니다. ASG 이름이나 인스턴스 상태를 확인하세요."
           exit 1
         fi
 
-        # 인스턴스 ID 목록으로 Public IP 조회
+        # xargs를 붙여 개행 문자 제거 처리
         IPS=$(aws ec2 describe-instances \
           --instance-ids $INSTANCE_IDS \
           --query "Reservations[*].Instances[*].PublicIpAddress" \
-          --output text)
+          --output text | xargs)
         
         echo "TARGET_IPS=$IPS" >> $GITHUB_ENV
-        echo "조회된 IP 목록: $IPS"
+        echo "조회된 IP 목록: '$IPS'"
 
     # 3. SSH Key 설정
     - name: Setup SSH Key
